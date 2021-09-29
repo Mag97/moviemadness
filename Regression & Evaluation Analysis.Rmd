@@ -1,0 +1,526 @@
+---
+title: "Movie Madness"
+author: "MaggieChen"
+date: "8/30/2021"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Preprocess
+
+```{r }
+suppressMessages(library(readr))
+suppressMessages(library(dplyr))
+suppressMessages(library(ggplot2))
+suppressMessages(library(tidyverse))
+suppressMessages(library(stringr))
+suppressMessages(library(statsr))
+suppressMessages(library(glmnet))
+suppressMessages(library(gridExtra))
+suppressMessages(library(corrplot))
+suppressMessages(library(pdp))
+suppressMessages(library(ROCR))
+suppressMessages(library(ISLR))
+suppressMessages(library(vip))
+suppressMessages(library(caret))
+
+
+setwd("~/STDS Assignment")
+movies <- read_tsv("all_top_rated_movies_2021-08-28.tsv.txt")
+movies_new <- read_tsv("all_top_rated_movies_2021-09-01.tsv.txt")
+
+glimpse(movies_new)
+
+colSums(is.na(movies_new)) #check the missing values
+
+# 16 missing values in overview and 2 in genre_ids 
+# Removing them 
+movies_new = na.omit(movies_new)
+colSums(is.na(movies_new))
+
+
+length(unique(movies_new$title))
+
+# Returns the unique rows in movies dataset
+movies_new %>% distinct()
+
+# Remove duplicate rows based on multiple variables 
+movies_new %>% distinct(title, release_date, .keep_all = TRUE)
+
+```
+
+
+## Correlation among variables
+
+From the correlation chart, it can observe that vote_count has positively correlated with revenue and budget. It may assume that higher budget and revenue movie has higher attention from the audiences, earning more votes.
+
+```{r}
+vars <- names(movies_new) %in% c('runtime', 'popularity', 'vote_average', 'budget','revenue','vote_count')
+selected_train <- movies_new[vars]
+corr.matrix <- cor(selected_train)
+corrplot(corr.matrix, main="\n\nCorrelation Plot of numerical variables", method="number")
+
+```
+
+
+## Generalised Linear Regression
+
+### Training and testing the model
+
+```{r}
+
+set.seed(42)
+
+#Prepare the split for train and test dataset
+
+Split <- floor(0.70 * nrow(movies_new))
+
+#Getting indices of the dataset
+
+Trainset_indices <- sample(seq_len(nrow(movies_new)), size = Split)
+
+#Preparing train and testing dataset
+TrainingDataSet <- movies_new[Trainset_indices, ]
+TestDataSet <- movies_new[-Trainset_indices, ]
+
+# Check number of rows in every set
+nrow(movies_new)
+
+linear_model <-lm(vote_average~revenue+popularity+budget+vote_count+runtime, data = TrainingDataSet)
+
+summary(linear_model)
+
+ggplot(data = linear_model, aes(x = .fitted, y = .resid)) +
+  geom_point() +
+  geom_hline(yintercept = 0, linetype = "dashed") +
+  xlab("Fitted values") +
+  ylab("Residuals")
+
+
+#Showing the residuals
+ggplot(data = linear_model, aes(x = .resid)) +
+  geom_histogram(binwidth = 1, fill='white', color='black') +
+  xlab("Residuals")
+
+```
+
+
+## Model Evaluation
+
+```{r}
+# Predict probabilities on the test set
+lm_prob <- predict.lm(linear_model,TestDataSet[,-1],type="response")
+
+# Create a vector to hold predictions
+lm_predict <- rep(0,nrow(TestDataSet[,-1]))
+lm_predict[lm_prob>8] <- 1
+
+# Create a confusion matrix
+lm_confusion_matrix <- table(pred=lm_predict,true=TestDataSet$vote_average)
+
+lm_confusion_matrix
+
+
+get_evaluation_measurements <- function(name = NA, tn, fp, fn, tp) {
+  
+  accuracy = (tp+tn)/(tp+tn+fp+fn)
+  
+  precision = tp/(tp+fp)
+  
+  recall = tp/(tp+fn)
+  
+  F1 = 2 * ((precision * recall)/(precision + recall))
+  
+  output = data.frame(name, accuracy, precision, recall, F1)
+  
+  return(output)
+  
+}
+
+
+# Data frame the confusion matrix result and output the evaluation measures
+
+lm_confusion_matrix_df <- as.data.frame(lm_confusion_matrix)
+
+lm_evaluation_measures <- get_evaluation_measurements("Linear Regression",
+                              lm_confusion_matrix_df$Freq[1],
+                              lm_confusion_matrix_df$Freq[2],
+                              lm_confusion_matrix_df$Freq[3],
+                              lm_confusion_matrix_df$Freq[4])
+
+lm_evaluation_measures
+
+
+
+```
+
+### GLM 
+
+```{r}
+set.seed(42)
+
+#Prepare the split for train and test dataset
+
+Split <- floor(0.70 * nrow(movies_new))
+
+#Getting indices of the dataset
+
+Trainset_indices <- sample(seq_len(nrow(movies_new)), size = Split)
+
+#Preparing train and testing dataset
+TrainingDataSet <- movies_new[Trainset_indices, ]
+TestDataSet <- movies_new[-Trainset_indices, ]
+
+
+
+tmdb_glm3 = glm(formula = vote_average ~ popularity + budget + vote_count + runtime+revenue,
+               data = TrainingDataSet,
+                 )
+summary(tmdb_glm3)
+
+
+```
+
+
+### GLM evaluation
+
+```{r}
+# Predict probabilities on the test set
+glm_prob <- predict.lm(tmdb_glm3, TestDataSet[,-1], type = "response")
+
+# Create a vector to hold predictions
+glm_predict <- rep(0,nrow(TestDataSet[,-1]))
+glm_predict[glm_prob>.8] <- 1
+
+# Create a confusion matrix
+glm_confusion_matrix <- table(pred = glm_predict, 
+                             true = TestDataSet$vote_average)
+
+glm_confusion_matrix
+
+
+get_evaluation_measurements <- function(name = NA, tn, fp, fn, tp) {
+  
+  accuracy = (tp+tn)/(tp+tn+fp+fn)
+  
+  precision = tp/(tp+fp)
+  
+  recall = tp/(tp+fn)
+  
+  F1 = 2 * ((precision * recall)/(precision + recall))
+  
+  output = data.frame(name, accuracy, precision, recall, F1)
+  
+  return(output)
+  
+}
+
+# Data frame the confusion matrix result and output the evaluation measures
+
+glm_confusion_matrix_df <- as.data.frame(glm_confusion_matrix)
+
+glm_evaluation_measures <- get_evaluation_measurements("GLM",
+                              glm_confusion_matrix_df$Freq[1],
+                              glm_confusion_matrix_df$Freq[2],
+                              glm_confusion_matrix_df$Freq[3],
+                              glm_confusion_matrix_df$Freq[4])
+
+glm_evaluation_measures
+
+```
+
+
+### Regression of popularity and movie rating
+
+The plot shows a clear trend of higher rating when popularity is higher. That means when the casts of the movie or the movie itself are popular on TMDB, the movie will also be more popular in general among audience.
+
+From regression model, it shows that there is close to 82% of variance in movie rating that can be explained by the popularity of movies. Popularity is statistically significant predictor for the vote_average.
+
+```{r}
+
+# See if popularity is highly associated with rating
+ggplot(data = movies_new, aes(x = popularity, y = vote_average)) +
+ geom_jitter() +
+ ggtitle("Plot of movie popularity vs rating") +
+ geom_smooth(method = "lm")
+
+m_popularity <- lm(vote_average ~ popularity, data = movies_new)
+summary(m_popularity)
+
+```
+
+### Linear regression of budget vs rating
+```{r}
+
+ggplot(data = movies_new, aes(x = budget, y = vote_average)) +
+ geom_jitter() +
+ ggtitle("Plot of movie budget vs rating") +
+ geom_smooth(method = "lm")
+
+m_budget <- lm(vote_average ~ budget, data = movies_new)
+summary(m_budget)
+```
+
+
+### Linear regression of revenue vs rating
+
+```{r}
+
+ggplot(data = movies_new, aes(x = revenue, y = vote_average)) +
+ geom_jitter() +
+ ggtitle("Plot of movie revenue vs rating") +
+ geom_smooth(method = "lm")
+
+m_revenue <- lm(vote_average ~ revenue, data = movies_new)
+summary(m_revenue)
+
+
+```
+
+### Linear regression of runtime vs rating
+
+```{r}
+
+ggplot(data = movies_new, aes(x = runtime, y = vote_average)) +
+ geom_jitter() +
+ ggtitle("Plot of movie runtime vs rating") +
+ geom_smooth(method = "lm")
+
+m_runtime <- lm(vote_average ~ runtime, data = movies_new)
+summary(m_runtime)
+
+
+```
+
+### Linear regression of popularity vs runtime
+
+```{r}
+
+ggplot(data = movies_new, aes(x = popularity, y = runtime)) +
+ geom_jitter() +
+ ggtitle("Plot of movie runtime vs popularity") +
+ geom_smooth(method = "lm")
+
+m_runtime_p <- lm(popularity ~ runtime, data = movies_new)
+summary(m_runtime_p)
+
+```
+
+### Regression of movie budget and revenue
+
+The plot shows a clear positive relationship between budget and revenue. 
+
+```{r}
+
+ggplot(data = movies_new, aes(x =budget , y = revenue)) +
+ geom_jitter() +
+ ggtitle("Plot of movie budget vs revenue") +
+ geom_smooth(method = "lm")
+
+```
+
+## LM Modelling
+
+### Dependent variable: vote_average
+
+The model indicates that there is close to 74% of variance on movie rating that can be explained by the independent variables. All the variables have positive correlation with rating, while budget seems to have negative correlation with movie rating. It depicts that even though a movie has a higher budget, it does not mean that it will be successful.
+
+```{r}
+full_model <- lm(vote_average~revenue+popularity+budget+vote_count+runtime, data=movies_new)
+summary(full_model)
+
+```
+
+### Dependent variable: popularity
+
+From the model, it demonstrates that there is 94% of variance of popularity can be explained by other 5 independent variables. There's an interesting fact that shorter the movie length (runtime), the more popular the movie is among audiences.
+
+```{r}
+t_model <- lm(popularity~vote_average+revenue+popularity+budget+vote_count+runtime, data=movies_new)
+summary(t_model)
+```
+
+##Add New Variable
+
+```{r}
+# Greater than 8 is set to 1 which represents a high performance, popular movie
+# Everything else is 0 
+movies_new$vote_rate = ifelse(movies_new$vote_average >= 8, 1, 0)
+
+```
+
+## Train and test new Lineal model
+ From the new linear regression model, the R squared figure became lower from 71% to 18%, means the input variables can only explained 18% variability of output variable (vote_rate).
+
+```{r}
+set.seed(42)
+
+#Prepare the split for train and test dataset
+
+Split <- floor(0.70 * nrow(movies_new))
+
+#Getting indices of the dataset
+
+Trainset_indices <- sample(seq_len(nrow(movies_new)), size = Split)
+
+#Preparing train and testing dataset
+TrainingDataSet <- movies_new[Trainset_indices, ]
+TestDataSet <- movies_new[-Trainset_indices, ]
+
+# Check number of rows in every set
+nrow(movies_new)
+
+linear_model <-lm(vote_rate~revenue+popularity+budget+vote_count+runtime, data = TrainingDataSet)
+
+summary(linear_model)
+
+ggplot(data = linear_model, aes(x = .fitted, y = .resid)) +
+  geom_point() +
+  geom_hline(yintercept = 0, linetype = "dashed") +
+  xlab("Fitted values") +
+  ylab("Residuals")
+
+
+#Showing the residuals
+ggplot(data = linear_model, aes(x = .resid)) +
+  geom_histogram(binwidth = 1, fill='white', color='black') +
+  xlab("Residuals")
+
+
+
+
+```
+
+## New linear model evaluation
+
+From the confusion matrix, there are none of “false negatives”, but the linear regression model incorrectly predict 82 of the 83 positives.
+The proportion of overall correct predictions (accuracy) is higher from 57% to 96% after adding new variable. However,the proportion of the actual target class predicted correctly (recall) is lower from 50% to 1.2%. And the new model has lower  blended metric of precision and recall score (F1).
+
+```{r}
+# Predict probabilities on the test set
+lm_prob <- predict.lm(linear_model,TestDataSet[,-1],type="response")
+
+# Create a vector to hold predictions
+lm_predict <- rep(0,nrow(TestDataSet[,-1]))
+lm_predict[lm_prob>0.5] <- 1
+
+# Create a confusion matrix
+lm_confusion_matrix <- table(pred=lm_predict,true=TestDataSet$vote_rate)
+
+lm_confusion_matrix
+
+
+get_evaluation_measurements <- function(name = NA, tn, fp, fn, tp) {
+  
+  accuracy = (tp+tn)/(tp+tn+fp+fn)
+  
+  precision = tp/(tp+fp)
+  
+  recall = tp/(tp+fn)
+  
+  F1 = 2 * ((precision * recall)/(precision + recall))
+  
+  output = data.frame(name, accuracy, precision, recall, F1)
+  
+  return(output)
+  
+}
+
+
+# Data frame the confusion matrix result and output the evaluation measures
+
+lm_confusion_matrix_df <- as.data.frame(lm_confusion_matrix)
+
+lm_evaluation_measures <- get_evaluation_measurements("Linear Regression",
+                              lm_confusion_matrix_df$Freq[1],
+                              lm_confusion_matrix_df$Freq[2],
+                              lm_confusion_matrix_df$Freq[3],
+                              lm_confusion_matrix_df$Freq[4])
+
+lm_evaluation_measures
+
+
+```
+
+## New GLM model
+ From the new generalised regression model, the R squared figure became lower from 71% to 18%, means the input variables can only explained 18% variability of output variable (vote_rate).
+ 
+```{r}
+set.seed(42)
+
+#Prepare the split for train and test dataset
+
+Split <- floor(0.70 * nrow(movies_new))
+
+#Getting indices of the dataset
+
+Trainset_indices <- sample(seq_len(nrow(movies_new)), size = Split)
+
+#Preparing train and testing dataset
+TrainingDataSet <- movies_new[Trainset_indices, ]
+TestDataSet <- movies_new[-Trainset_indices, ]
+
+
+
+tmdb_glm4 = glm(formula = vote_rate ~ popularity + budget + vote_count + runtime+revenue,
+               data = TrainingDataSet,
+                 )
+summary(tmdb_glm4)
+
+
+```
+
+
+### new GLM evaluation
+From the confusion matrix, there are none of “false negatives”, but the linear regression model incorrectly predict 82 of the 83 positives.
+The proportion of overall correct predictions (accuracy) is higher from 57% to 96% after adding new variable. However,the proportion of the actual target class predicted correctly (recall) is lower from 50% to 1.2%. And the new model has lower  blended metric of precision and recall score (F1).
+
+```{r}
+# Predict probabilities on the test set
+glm_prob <- predict.lm(tmdb_glm4, TestDataSet[,-1], type = "response")
+
+# Create a vector to hold predictions
+glm_predict <- rep(0,nrow(TestDataSet[,-1]))
+glm_predict[glm_prob>.5] <- 1
+
+# Create a confusion matrix
+glm_confusion_matrix <- table(pred = glm_predict, 
+                             true = TestDataSet$vote_rate)
+
+glm_confusion_matrix
+
+
+get_evaluation_measurements <- function(name = NA, tn, fp, fn, tp) {
+  
+  accuracy = (tp+tn)/(tp+tn+fp+fn)
+  
+  precision = tp/(tp+fp)
+  
+  recall = tp/(tp+fn)
+  
+  F1 = 2 * ((precision * recall)/(precision + recall))
+  
+  output = data.frame(name, accuracy, precision, recall, F1)
+  
+  return(output)
+  
+}
+
+# Data frame the confusion matrix result and output the evaluation measures
+
+glm_confusion_matrix_df <- as.data.frame(glm_confusion_matrix)
+
+glm_evaluation_measures <- get_evaluation_measurements("GLM",
+                              glm_confusion_matrix_df$Freq[1],
+                              glm_confusion_matrix_df$Freq[2],
+                              glm_confusion_matrix_df$Freq[3],
+                              glm_confusion_matrix_df$Freq[4])
+
+glm_evaluation_measures
+
+```
+
+
